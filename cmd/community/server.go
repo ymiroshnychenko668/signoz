@@ -16,7 +16,7 @@ import (
 	"github.com/SigNoz/signoz/pkg/authz"
 	"github.com/SigNoz/signoz/pkg/authz/openfgaauthz"
 	"github.com/SigNoz/signoz/pkg/authz/openfgaschema"
-	"github.com/SigNoz/signoz/pkg/authz/openfgaserver"
+
 	"github.com/SigNoz/signoz/pkg/cache"
 	"github.com/SigNoz/signoz/pkg/errors"
 	"github.com/SigNoz/signoz/pkg/factory"
@@ -119,7 +119,7 @@ func runServer(ctx context.Context, config signoz.Config, logger *slog.Logger) e
 			return providers, err
 		},
 		func(ctx context.Context, sqlstore sqlstore.SQLStore, config authz.Config, _ licensing.Licensing, _ []authz.OnBeforeRoleDelete) (factory.ProviderFactory[authz.AuthZ, authz.Config], error) {
-			openfgaDataStore, err := openfgaserver.NewSQLStore(sqlstore, config)
+			openfgaDataStore, err := accessDatastore(sqlstore, config)
 			if err != nil {
 				return nil, err
 			}
