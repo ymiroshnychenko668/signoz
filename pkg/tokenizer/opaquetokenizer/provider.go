@@ -138,7 +138,7 @@ func (provider *provider) CreateToken(ctx context.Context, identity *authtypes.I
 }
 
 func (provider *provider) GetIdentity(ctx context.Context, accessToken string) (*authtypes.Identity, error) {
-	token, err := provider.getOrGetSetToken(ctx, accessToken)
+	token, err := provider.getToken(ctx, accessToken)
 	if err != nil {
 		return nil, err
 	}
@@ -179,6 +179,7 @@ func (provider *provider) RotateToken(ctx context.Context, accessToken string, r
 				return err
 			}
 		}
+		provider.applyLastObservedAt(token)
 		currentAccessToken := token.AccessToken
 
 		if err := token.Rotate(accessToken, refreshToken, provider.config.Rotation.Duration, provider.config.Lifetime.Idle, provider.config.Lifetime.Max); err != nil {
@@ -213,6 +214,25 @@ func (provider *provider) RotateToken(ctx context.Context, accessToken string, r
 }
 
 func (provider *provider) DeleteToken(ctx context.Context, accessToken string) error {
+	if !provider.config.EnforcedBrowserOrg.IsZero() {
+		// Rotation and logout must act on the same locked session row. During
+		// the rotation grace period the request may carry its previous key.
+		err := provider.tokenStore.GetOrUpdateByAccessTokenOrPrevAccessToken(ctx, accessToken, func(ctx context.Context, token *authtypes.StorableToken) error {
+			if accessToken != token.AccessToken && !token.RotatedAt.After(time.Now().Add(-provider.config.Rotation.Duration)) {
+				return nil
+			}
+			if err := provider.tokenStore.DeleteByAccessToken(ctx, token.AccessToken); err != nil {
+				return err
+			}
+			// Discard entries written by earlier versions using a shared cache.
+			provider.cache.Delete(ctx, emptyOrgID, accessTokenCacheKey(token.AccessToken))
+			return nil
+		})
+		if err != nil && errors.Ast(err, errors.TypeNotFound) {
+			return nil
+		}
+		return err
+	}
 	provider.cache.Delete(ctx, emptyOrgID, accessTokenCacheKey(accessToken))
 	if err := provider.tokenStore.DeleteByAccessToken(ctx, accessToken); err != nil {
 		return err
@@ -267,9 +287,17 @@ func (provider *provider) Stop(ctx context.Context) error {
 }
 
 func (provider *provider) SetLastObservedAt(ctx context.Context, accessToken string, lastObservedAt time.Time) error {
-	token, err := provider.getOrGetSetToken(ctx, accessToken)
+	token, err := provider.getToken(ctx, accessToken)
 	if err != nil {
+		// A request can finish after its session has been revoked.
+		if !provider.config.EnforcedBrowserOrg.IsZero() && errors.Ast(err, errors.TypeNotFound) {
+			return nil
+		}
 		return err
+	}
+
+	if !provider.config.EnforcedBrowserOrg.IsZero() && token.IsExpired(provider.config.Lifetime.Idle, provider.config.Lifetime.Max) != nil {
+		return nil
 	}
 
 	// If we can't update the last observed at, we return nil.
@@ -279,6 +307,11 @@ func (provider *provider) SetLastObservedAt(ctx context.Context, accessToken str
 
 	if ok := provider.lastObservedAtCache.Set(lastObservedAtCacheKey(accessToken, token.UserID), lastObservedAt, 24); !ok {
 		provider.settings.Logger().ErrorContext(ctx, "error caching last observed at timestamp", slog.Any("user_id", token.UserID))
+	}
+
+	if !provider.config.EnforcedBrowserOrg.IsZero() {
+		provider.lastObservedAtCache.Wait()
+		return nil
 	}
 
 	err = provider.cache.Set(ctx, emptyOrgID, accessTokenCacheKey(accessToken), token, provider.config.Lifetime.Max)
@@ -368,6 +401,7 @@ func (provider *provider) gc(ctx context.Context, org *types.Organization) error
 
 	var tokensToDelete []valuer.UUID
 	for _, token := range tokens {
+		provider.applyLastObservedAt(token)
 		if err := token.IsExpired(provider.config.Lifetime.Idle, provider.config.Lifetime.Max); err != nil {
 			tokensToDelete = append(tokensToDelete, token.ID)
 		}
@@ -410,7 +444,18 @@ func (provider *provider) flushLastObservedAt(ctx context.Context, org *types.Or
 	return nil
 }
 
-func (provider *provider) getOrGetSetToken(ctx context.Context, accessToken string) (*authtypes.Token, error) {
+func (provider *provider) getToken(ctx context.Context, accessToken string) (*authtypes.Token, error) {
+	if !provider.config.EnforcedBrowserOrg.IsZero() {
+		// Only the current persisted row grants access. A cache may outlive
+		// a rotation or revocation on another request or another replica.
+		token, err := provider.tokenStore.GetByAccessToken(ctx, accessToken)
+		if err != nil {
+			return nil, err
+		}
+		provider.applyLastObservedAt(token)
+		return token, nil
+	}
+
 	token := new(authtypes.Token)
 	err := provider.cache.Get(ctx, emptyOrgID, accessTokenCacheKey(accessToken), token)
 	if err != nil && !errors.Ast(err, errors.TypeNotFound) {
@@ -434,10 +479,21 @@ func (provider *provider) getOrGetSetToken(ctx context.Context, accessToken stri
 	return token, nil
 }
 
+// Idle activity is buffered independently of session validity until the next flush.
+func (provider *provider) applyLastObservedAt(token *authtypes.Token) {
+	if provider.config.EnforcedBrowserOrg.IsZero() {
+		return
+	}
+	if seen, ok := provider.lastObservedAtCache.Get(lastObservedAtCacheKey(token.AccessToken, token.UserID)); ok && seen.After(token.LastObservedAt) {
+		token.LastObservedAt = seen
+	}
+}
+
 func (provider *provider) setToken(ctx context.Context, token *authtypes.Token, create bool) error {
-	err := provider.cache.Set(ctx, emptyOrgID, accessTokenCacheKey(token.AccessToken), token, provider.config.Lifetime.Max)
-	if err != nil {
-		return err
+	if provider.config.EnforcedBrowserOrg.IsZero() {
+		if err := provider.cache.Set(ctx, emptyOrgID, accessTokenCacheKey(token.AccessToken), token, provider.config.Lifetime.Max); err != nil {
+			return err
+		}
 	}
 
 	if create {
