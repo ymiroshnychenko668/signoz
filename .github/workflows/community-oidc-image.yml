@@ -12,6 +12,14 @@ jobs:
   publish:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16.15-bookworm@sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa932a8d9
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - '127.0.0.1:5432:5432'
+        options: --health-cmd pg_isready --health-interval 2s --health-timeout 3s --health-retries 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -35,9 +43,14 @@ jobs:
       - name: Test and build the Community server
         env:
           CGO_ENABLED: '0'
+          SIGNOZ_TEST_POSTGRES_DSN: 'postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable'
+          SIGNOZ_SQLSTORE_PROVIDER: postgres
+          SIGNOZ_SQLSTORE_POSTGRES_DSN: 'postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable'
         run: |
-          go test ./pkg/authn/communityoidc ./pkg/modules/session/implsession ./pkg/tokenizer/opaquetokenizer ./pkg/types/authtypes
+          go test ./pkg/authn/communityoidc ./pkg/modules/session/implsession ./pkg/tokenizer/opaquetokenizer ./pkg/types/authtypes ./pkg/sqlschema/communitypostgres ./pkg/sqlstore/communitypostgres
           make go-build-community-amd64 OS=linux VERSION="${GITHUB_REF_NAME#community-}" COMMIT_SHORT_SHA="$GITHUB_SHA"
+          target/linux-amd64/signoz-community metastore migrate sync up
+          target/linux-amd64/signoz-community metastore migrate sync check
       - name: Publish the linux/amd64 image
         env:
           PACKAGE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
