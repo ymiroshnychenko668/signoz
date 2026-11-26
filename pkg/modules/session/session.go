@@ -6,11 +6,14 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/SigNoz/signoz/pkg/authn/communityoidc"
 	"github.com/SigNoz/signoz/pkg/types/authtypes"
 	"github.com/SigNoz/signoz/pkg/valuer"
 )
 
 type Module interface {
+	CommunityOIDC() *communityoidc.Provider
+	CreateCommunityOIDCSession(context.Context, *communityoidc.Login) (*authtypes.Token, error)
 	// Gets the session context for the user. The context contains information on what the user has to do in order to create a session.
 	GetSessionContext(ctx context.Context, email valuer.Email, siteURL *url.URL) (*authtypes.SessionContext, error)
 
@@ -31,6 +34,11 @@ type Module interface {
 }
 
 type Handler interface {
+	CommunityOIDCStatus(http.ResponseWriter, *http.Request)
+	CommunityOIDCLogin(http.ResponseWriter, *http.Request)
+	CommunityOIDCCallback(http.ResponseWriter, *http.Request)
+	CommunityOIDCComplete(http.ResponseWriter, *http.Request)
+
 	// Get the session context for the user.
 	GetSessionContext(http.ResponseWriter, *http.Request)
 

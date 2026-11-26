@@ -152,13 +152,33 @@ func (provider *provider) GetIdentity(ctx context.Context, accessToken string) (
 		return nil, err
 	}
 
+	if err := provider.checkBrowserSession(token, identity); err != nil {
+		return nil, err
+	}
 	return identity, nil
+}
+
+// Enabling SSO immediately invalidates earlier interactive sessions in this organization.
+func (provider *provider) checkBrowserSession(token *authtypes.Token, identity *authtypes.Identity) error {
+	if !provider.config.EnforcedBrowserOrg.IsZero() && identity.OrgID == provider.config.EnforcedBrowserOrg && token.Meta[authtypes.CommunityOIDCDeadline] == "" && token.Meta[authtypes.CommunityOIDCRoot] != "true" {
+		return errors.New(errors.TypeUnauthenticated, authtypes.ErrCodeTokenExpired, "authenticate again")
+	}
+	return nil
 }
 
 func (provider *provider) RotateToken(ctx context.Context, accessToken string, refreshToken string) (*authtypes.Token, error) {
 	var rotatedToken *authtypes.Token
 
 	if err := provider.tokenStore.GetOrUpdateByAccessTokenOrPrevAccessToken(ctx, accessToken, func(ctx context.Context, token *authtypes.StorableToken) error {
+		if !provider.config.EnforcedBrowserOrg.IsZero() {
+			identity, err := provider.getOrGetSetIdentity(ctx, token.UserID)
+			if err != nil {
+				return err
+			}
+			if err := provider.checkBrowserSession(token, identity); err != nil {
+				return err
+			}
+		}
 		currentAccessToken := token.AccessToken
 
 		if err := token.Rotate(accessToken, refreshToken, provider.config.Rotation.Duration, provider.config.Lifetime.Idle, provider.config.Lifetime.Max); err != nil {

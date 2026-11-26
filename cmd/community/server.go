@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/SigNoz/signoz/pkg/analytics"
 	"github.com/SigNoz/signoz/pkg/auditor"
 	"github.com/SigNoz/signoz/pkg/authn"
+	"github.com/SigNoz/signoz/pkg/authn/communityoidc"
 	"github.com/SigNoz/signoz/pkg/authz"
 	"github.com/SigNoz/signoz/pkg/authz/openfgaauthz"
 	"github.com/SigNoz/signoz/pkg/authz/openfgaschema"
@@ -80,6 +82,17 @@ func runServer(ctx context.Context, config signoz.Config, logger *slog.Logger) e
 	// print the version
 	version.Info.PrettyPrint(config.Version)
 
+	communityOIDC, err := communityoidc.Load(os.Getenv("COMMUNITY_OIDC_CONFIG_FILE"))
+	if err != nil {
+		return err
+	}
+	if communityOIDC != nil {
+		if config.Tokenizer.Provider != "opaque" || config.IdentN.Impersonation.Enabled || !config.IdentN.Tokenizer.Enabled {
+			return errors.New(errors.TypeInvalidInput, errors.CodeInvalidInput, "community OIDC requires opaque user sessions and token identity resolution")
+		}
+		config.Tokenizer.EnforcedBrowserOrg = communityOIDC.OrgID
+	}
+
 	signoz, err := signoz.New(
 		ctx,
 		config,
@@ -99,7 +112,11 @@ func runServer(ctx context.Context, config signoz.Config, logger *slog.Logger) e
 		sqlstoreProviderFactories(),
 		signoz.NewTelemetryStoreProviderFactories(),
 		func(ctx context.Context, providerSettings factory.ProviderSettings, store authtypes.AuthNStore, licensing licensing.Licensing) (map[authtypes.AuthNProvider]authn.AuthN, error) {
-			return signoz.NewAuthNs(ctx, providerSettings, store, licensing, config.Global)
+			providers, err := signoz.NewAuthNs(ctx, providerSettings, store, licensing, config.Global)
+			if err == nil && communityOIDC != nil {
+				providers[communityoidc.ProviderID] = communityOIDC
+			}
+			return providers, err
 		},
 		func(ctx context.Context, sqlstore sqlstore.SQLStore, config authz.Config, _ licensing.Licensing, _ []authz.OnBeforeRoleDelete) (factory.ProviderFactory[authz.AuthZ, authz.Config], error) {
 			openfgaDataStore, err := openfgaserver.NewSQLStore(sqlstore, config)

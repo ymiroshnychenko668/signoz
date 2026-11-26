@@ -3,11 +3,16 @@ package tokenizer
 import (
 	"time"
 
+	"github.com/SigNoz/signoz/pkg/valuer"
+
 	"github.com/SigNoz/signoz/pkg/errors"
 	"github.com/SigNoz/signoz/pkg/factory"
 )
 
 type Config struct {
+	// Set by the Community server when native OIDC is configured.
+	EnforcedBrowserOrg valuer.UUID `mapstructure:"-" json:"-" yaml:"-"`
+
 	// The provider to use for tokenization.
 	Provider string `mapstructure:"provider"`
 

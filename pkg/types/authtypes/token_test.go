@@ -60,3 +60,13 @@ func TestTokenRotatePrevPair(t *testing.T) {
 		})
 	}
 }
+
+func TestCommunityOIDCDeadlineSurvivesRotationAndRetries(t *testing.T) {
+	token, previousAccess, previousRefresh := newRotatedToken(t, time.Now())
+	token.Meta[CommunityOIDCDeadline] = "1"
+	require.Error(t, token.IsValid(testRotationDuration, testIdleDuration, testMaxDuration))
+	require.Error(t, token.Rotate(token.AccessToken, token.RefreshToken, testRotationDuration, testIdleDuration, testMaxDuration))
+	require.Error(t, token.Rotate(previousAccess, previousRefresh, testRotationDuration, testIdleDuration, testMaxDuration))
+	token.Meta[CommunityOIDCDeadline] = "invalid"
+	require.Error(t, token.IsExpired(testIdleDuration, testMaxDuration))
+}
