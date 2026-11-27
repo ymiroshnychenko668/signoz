@@ -60,7 +60,7 @@ func (store *store) GetByAccessToken(ctx context.Context, accessToken string) (*
 		Where("access_token = ?", accessToken).
 		Scan(ctx)
 	if err != nil {
-		return nil, store.sqlstore.WrapNotFoundErrf(err, authtypes.ErrCodeTokenNotFound, "token does not exist", accessToken)
+		return nil, store.sqlstore.WrapNotFoundErrf(err, authtypes.ErrCodeTokenNotFound, "token does not exist")
 	}
 
 	return token, nil
@@ -84,7 +84,7 @@ func (store *store) GetOrUpdateByAccessTokenOrPrevAccessToken(ctx context.Contex
 
 		err := selectQuery.Scan(ctx)
 		if err != nil {
-			return store.sqlstore.WrapNotFoundErrf(err, authtypes.ErrCodeTokenNotFound, "token does not exist", accessToken)
+			return store.sqlstore.WrapNotFoundErrf(err, authtypes.ErrCodeTokenNotFound, "token does not exist")
 		}
 
 		if err := updater(ctx, token); err != nil {
@@ -107,7 +107,7 @@ func (store *store) GetByUserIDAndRefreshToken(ctx context.Context, userID value
 		Where("refresh_token = ?", refreshToken).
 		Scan(ctx)
 	if err != nil {
-		return nil, store.sqlstore.WrapNotFoundErrf(err, authtypes.ErrCodeTokenNotFound, "token with user id: %s and refresh token: %s does not exist", userID, refreshToken)
+		return nil, store.sqlstore.WrapNotFoundErrf(err, authtypes.ErrCodeTokenNotFound, "token does not exist")
 	}
 
 	return token, nil

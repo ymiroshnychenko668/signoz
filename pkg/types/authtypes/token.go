@@ -14,6 +14,9 @@ import (
 	"github.com/uptrace/bun"
 )
 
+const CommunityOIDCDeadline = "community_oidc_expires"
+const CommunityOIDCRoot = "community_oidc_root"
+
 var (
 	ErrCodeTokenRotationRequired    = errors.MustNewCode("token_rotation_required")
 	ErrCodeTokenExpired             = errors.MustNewCode("token_expired")
@@ -136,6 +139,13 @@ func (typ *Token) IsValid(rotationInterval time.Duration, idleDuration time.Dura
 }
 
 func (typ *Token) IsExpired(idleDuration time.Duration, maxDuration time.Duration) error {
+	if expiry, ok := typ.Meta[CommunityOIDCDeadline]; ok {
+		seconds, err := strconv.ParseInt(expiry, 10, 64)
+		if err != nil || !time.Now().Before(time.Unix(seconds, 0)) {
+			return errors.New(errors.TypeUnauthenticated, ErrCodeTokenExpired, "single sign-on session expired")
+		}
+	}
+
 	// If now - last_seen_at > idle_duration, the token will be considered as expired.
 	if !typ.LastObservedAt.IsZero() && typ.LastObservedAt.Before(time.Now().Add(-idleDuration)) {
 		return errors.New(errors.TypeUnauthenticated, ErrCodeTokenExpired, "token has not been used for too long")
@@ -162,6 +172,11 @@ func (typ *Token) IsRotationRequired(rotationInterval time.Duration) error {
 }
 
 func (typ *Token) Rotate(accessTokenOrPrevAccessToken string, refreshTokenOrPrevRefreshToken string, rotationDuration time.Duration, idleDuration time.Duration, maxDuration time.Duration) error {
+	if _, ok := typ.Meta[CommunityOIDCDeadline]; ok {
+		if err := typ.IsExpired(idleDuration, maxDuration); err != nil {
+			return err
+		}
+	}
 	if typ.PrevAccessToken == accessTokenOrPrevAccessToken && typ.PrevRefreshToken == refreshTokenOrPrevRefreshToken {
 		// If the token has been rotated within the rotation duration, do nothing and return the same token.
 		if !typ.RotatedAt.IsZero() && typ.RotatedAt.After(time.Now().Add(-rotationDuration)) {
@@ -195,11 +210,18 @@ func (typ *Token) Rotate(accessTokenOrPrevAccessToken string, refreshTokenOrPrev
 }
 
 func (typ *Token) RotationAt(rotationInterval time.Duration) time.Time {
-	if typ.RotatedAt.IsZero() {
-		return typ.CreatedAt.Add(rotationInterval)
+	lastRotation := typ.RotatedAt
+	if lastRotation.IsZero() {
+		lastRotation = typ.CreatedAt
 	}
-
-	return typ.RotatedAt.Add(rotationInterval)
+	next := lastRotation.Add(rotationInterval)
+	if value, ok := typ.Meta[CommunityOIDCDeadline]; ok {
+		seconds, err := strconv.ParseInt(value, 10, 64)
+		if deadline := time.Unix(seconds, 0); err != nil || deadline.Before(next) {
+			return deadline
+		}
+	}
+	return next
 }
 
 func (typ *Token) UpdateLastObservedAt(lastObservedAt time.Time) error {

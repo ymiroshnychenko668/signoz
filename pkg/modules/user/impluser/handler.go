@@ -99,6 +99,7 @@ func (handler *handler) GetMyUserDeprecated(w http.ResponseWriter, r *http.Reque
 }
 
 func (handler *handler) GetMyUser(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 

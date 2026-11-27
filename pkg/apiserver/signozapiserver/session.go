@@ -3,6 +3,7 @@ package signozapiserver
 import (
 	"net/http"
 
+	"github.com/SigNoz/signoz/pkg/authn/communityoidc"
 	"github.com/SigNoz/signoz/pkg/http/handler"
 	"github.com/SigNoz/signoz/pkg/types/authtypes"
 	"github.com/SigNoz/signoz/pkg/types/coretypes"
@@ -10,6 +11,25 @@ import (
 )
 
 func (provider *provider) addSessionRoutes(router *mux.Router) error {
+	for _, route := range []struct {
+		path, method, id string
+		serve            http.HandlerFunc
+		success          int
+		response         any
+	}{
+		{communityoidc.StatusPath, http.MethodGet, "GetCommunityOIDCStatus", provider.sessionHandler.CommunityOIDCStatus, http.StatusOK, new(struct {
+			Enabled bool `json:"enabled"`
+		})},
+		{communityoidc.LoginPath, http.MethodGet, "StartCommunityOIDC", provider.sessionHandler.CommunityOIDCLogin, http.StatusSeeOther, nil},
+		{communityoidc.CallbackPath, http.MethodGet, "CallbackCommunityOIDC", provider.sessionHandler.CommunityOIDCCallback, http.StatusSeeOther, nil},
+		{communityoidc.CompletePath, http.MethodPost, "CompleteCommunityOIDC", provider.sessionHandler.CommunityOIDCComplete, http.StatusOK, new(authtypes.GettableToken)},
+	} {
+		h := handler.New(provider.authzMiddleware.OpenAccess(route.serve), handler.OpenAPIDef{ID: route.id, Tags: []string{"sessions"}, Summary: route.id, SuccessStatusCode: route.success, Response: route.response, ResponseContentType: "application/json", ErrorStatusCodes: []int{http.StatusForbidden, http.StatusNotFound}})
+		if err := router.Handle(route.path, h).Methods(route.method).GetError(); err != nil {
+			return err
+		}
+	}
+
 	if err := router.Handle("/api/v2/sessions/email_password", handler.New(provider.authzMiddleware.OpenAccess(provider.sessionHandler.CreateSessionByEmailPassword), handler.OpenAPIDef{
 		ID:                  "CreateSessionByEmailPassword",
 		Tags:                []string{"sessions"},

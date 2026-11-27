@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
+
 	"time"
 
 	"github.com/SigNoz/signoz/pkg/authn"
@@ -24,6 +26,8 @@ import (
 )
 
 type module struct {
+	communityLoginMu sync.Mutex
+
 	settings     factory.ScopedProviderSettings
 	authNs       map[authtypes.AuthNProvider]authn.AuthN
 	userSetter   user.Setter
@@ -128,7 +132,15 @@ func (module *module) CreatePasswordAuthNSession(ctx context.Context, authNProvi
 		return nil, err
 	}
 
-	return module.tokenizer.CreateToken(ctx, identity, map[string]string{})
+	meta := map[string]string{}
+	if p := module.CommunityOIDC(); p != nil && orgID == p.OrgID {
+		root, _, err := module.userGetter.GetRootUserByOrgID(ctx, orgID)
+		if err != nil || !root.IsRoot || root.ID != identity.UserID {
+			return nil, errors.New(errors.TypeUnauthenticated, errors.CodeUnauthenticated, "single sign-on required")
+		}
+		meta[authtypes.CommunityOIDCRoot] = "true"
+	}
+	return module.tokenizer.CreateToken(ctx, identity, meta)
 }
 
 func (module *module) CreateCallbackAuthNSession(ctx context.Context, authNProvider authtypes.AuthNProvider, values url.Values) (string, error) {
@@ -141,6 +153,10 @@ func (module *module) CreateCallbackAuthNSession(ctx context.Context, authNProvi
 	if err != nil {
 		module.settings.Logger().ErrorContext(ctx, "failed to handle callback", errors.Attr(err), slog.Any("authn_provider", authNProvider))
 		return "", err
+	}
+
+	if p := module.CommunityOIDC(); p != nil && callbackIdentity.OrgID == p.OrgID {
+		return "", errors.New(errors.TypeForbidden, errors.CodeForbidden, "community OIDC is required for this organization")
 	}
 
 	if callbackIdentity.State.URL.Host != "" && !module.globalConfig.IsOriginAllowed(callbackIdentity.State.URL) {
